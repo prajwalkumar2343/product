@@ -1,0 +1,29 @@
+{
+  "schemaVersion": 1,
+  "id": "acme",
+  "name": "Acme Product",
+  "enabled": true,
+  "allowedOrigins": ["https://www.example.com"],
+  "startUrl": "https://demo.example.com/",
+  "allowedHosts": ["demo.example.com", "static.example.com"],
+  "features": [
+    {
+      "id": "analytics",
+      "name": "Analytics",
+      "description": "Shows the demo analytics dashboard and filters.",
+      "path": "/analytics"
+    }
+  ],
+  "fixtures": {
+    "search_query": "Example customer"
+  },
+  "allowedActionIds": ["apply_filter"],
+  "forbiddenActionPatterns": ["delete", "remove", "purchase", "pay", "invite", "send"],
+  "maxDurationSeconds": 600,
+  "maxSteps": 20,
+  "maxConcurrentSessions": 5,
+  "turnstileRequired": true,
+  "productGuide": "Acme helps teams inspect analytics. Demonstrate only the configured demo tenant.",
+  "createdAt": "2026-01-01T00:00:00.000Z",
+  "updatedAt": "2026-01-01T00:00:00.000Z"
+}
