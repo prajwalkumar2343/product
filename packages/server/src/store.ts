@@ -12,8 +12,21 @@ import {
   type ToolCallRecord
 } from "@product/contracts";
 import { Firestore, type DocumentReference } from "@google-cloud/firestore";
+import { createHash } from "node:crypto";
 
 export type AdmissionResult = "admitted" | "exists" | "capacity";
+export type SessionTransitionPatch = Partial<
+  Pick<
+    DemoSession,
+    "steelSessionId" | "viewerUrl" | "completedAt" | "failureCode" | "failureMessage"
+  >
+>;
+
+export interface RateLimitResult {
+  allowed: boolean;
+  remaining: number;
+  retryAfterSeconds: number;
+}
 
 export interface SessionStore {
   getIntegration(id: string): Promise<Integration | null>;
@@ -32,7 +45,8 @@ export interface SessionStore {
     to: SessionStatus;
     eventType: SessionEventType;
     eventData?: Record<string, unknown>;
-    patch?: Partial<DemoSession>;
+    patch?: SessionTransitionPatch;
+    leaseOwner?: string;
   }): Promise<DemoSession | null>;
   claimLease(sessionId: string, owner: string, leaseUntil: string): Promise<DemoSession | null>;
   heartbeat(sessionId: string, owner: string, leaseUntil: string): Promise<boolean>;
@@ -47,7 +61,16 @@ export interface SessionStore {
     error?: string;
     eventType: SessionEventType;
     eventData: Record<string, unknown>;
-  }): Promise<void>;
+    leaseOwner: string;
+  }): Promise<boolean>;
+  consumeRateLimit(options: {
+    scope: string;
+    key: string;
+    limit: number;
+    windowSeconds: number;
+    now?: Date;
+  }): Promise<RateLimitResult>;
+  healthCheck(): Promise<void>;
 }
 
 export class FirestoreSessionStore implements SessionStore {
@@ -132,13 +155,15 @@ export class FirestoreSessionStore implements SessionStore {
     to: SessionStatus;
     eventType: SessionEventType;
     eventData?: Record<string, unknown>;
-    patch?: Partial<DemoSession>;
+    patch?: SessionTransitionPatch;
+    leaseOwner?: string;
   }): Promise<DemoSession | null> {
     const sessionRef = this.sessionRef(options.sessionId);
     const now = new Date().toISOString();
     return this.db.runTransaction(async (transaction) => {
       const session = parseSessionSnapshot(await transaction.get(sessionRef));
       if (!options.from.includes(session.status)) return null;
+      if (options.leaseOwner && session.leaseOwner !== options.leaseOwner) return null;
       const becomingTerminal =
         !TERMINAL_SESSION_STATUSES.has(session.status) && TERMINAL_SESSION_STATUSES.has(options.to);
       const capacityRef = this.db.collection("integrationCapacity").doc(session.integrationId);
@@ -272,17 +297,25 @@ export class FirestoreSessionStore implements SessionStore {
     error?: string;
     eventType: SessionEventType;
     eventData: Record<string, unknown>;
-  }): Promise<void> {
+    leaseOwner: string;
+  }): Promise<boolean> {
     const sessionRef = this.sessionRef(options.sessionId);
-    await this.db.runTransaction(async (transaction) => {
+    return this.db.runTransaction(async (transaction) => {
       const session = parseSessionSnapshot(await transaction.get(sessionRef));
+      if (session.leaseOwner !== options.leaseOwner) return false;
+      const callRef = sessionRef.collection("toolCalls").doc(options.callId);
+      const callSnapshot = await transaction.get(callRef);
+      if (!callSnapshot.exists) throw new Error("Tool call not found");
+      const call = ToolCallRecordSchema.parse(callSnapshot.data());
+      if (call.sessionId !== options.sessionId) throw new Error("Tool call session mismatch");
+      if (call.status !== "running") return false;
       const event = buildEvent(
         session,
         options.eventType,
         options.eventData,
         session.eventSequence + 1
       );
-      transaction.update(sessionRef.collection("toolCalls").doc(options.callId), {
+      transaction.update(callRef, {
         status: options.status,
         ...(options.result ? { result: options.result } : {}),
         ...(options.error ? { error: options.error } : {}),
@@ -290,7 +323,60 @@ export class FirestoreSessionStore implements SessionStore {
       });
       transaction.update(sessionRef, { eventSequence: event.sequence, updatedAt: event.createdAt });
       transaction.create(sessionRef.collection("events").doc(event.id), event);
+      return true;
     });
+  }
+
+  public async consumeRateLimit(options: {
+    scope: string;
+    key: string;
+    limit: number;
+    windowSeconds: number;
+    now?: Date;
+  }): Promise<RateLimitResult> {
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1)
+      throw new Error("Rate limit must be a positive integer");
+    if (!Number.isSafeInteger(options.windowSeconds) || options.windowSeconds < 1)
+      throw new Error("Rate limit window must be a positive integer");
+    const now = options.now ?? new Date();
+    const nowMs = now.getTime();
+    const durationMs = options.windowSeconds * 1_000;
+    const id = createHash("sha256").update(`${options.scope}\0${options.key}`).digest("hex");
+    const ref = this.db.collection("rateLimits").doc(id);
+    return this.db.runTransaction(async (transaction) => {
+      const snapshot = await transaction.get(ref);
+      const data = snapshot.data();
+      const storedStartedAt = typeof data?.windowStartedAt === "string" ? data.windowStartedAt : "";
+      const parsedStartedAt = Date.parse(storedStartedAt);
+      const storedCount = Number(data?.count ?? 0);
+      const validWindow =
+        Number.isFinite(parsedStartedAt) &&
+        parsedStartedAt <= nowMs &&
+        nowMs < parsedStartedAt + durationMs &&
+        Number.isSafeInteger(storedCount) &&
+        storedCount >= 0;
+      const windowStartedAtMs = validWindow ? parsedStartedAt : nowMs;
+      const count = validWindow ? storedCount : 0;
+      const resetAtMs = windowStartedAtMs + durationMs;
+      const retryAfterSeconds = Math.max(1, Math.ceil((resetAtMs - nowMs) / 1_000));
+      if (count >= options.limit) return { allowed: false, remaining: 0, retryAfterSeconds };
+      const nextCount = count + 1;
+      transaction.set(ref, {
+        scope: options.scope,
+        count: nextCount,
+        windowStartedAt: new Date(windowStartedAtMs).toISOString(),
+        expiresAt: new Date(resetAtMs + durationMs).toISOString()
+      });
+      return {
+        allowed: true,
+        remaining: Math.max(0, options.limit - nextCount),
+        retryAfterSeconds
+      };
+    });
+  }
+
+  public async healthCheck(): Promise<void> {
+    await this.db.collection("integrations").limit(1).get();
   }
 
   private sessionRef(id: string): DocumentReference {

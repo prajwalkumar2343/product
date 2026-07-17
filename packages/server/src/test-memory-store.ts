@@ -7,7 +7,12 @@ import {
   type SessionStatus,
   type ToolCallRecord
 } from "@product/contracts";
-import type { AdmissionResult, SessionStore } from "./store.js";
+import type {
+  AdmissionResult,
+  RateLimitResult,
+  SessionStore,
+  SessionTransitionPatch
+} from "./store.js";
 
 export class MemoryStore implements SessionStore {
   public readonly integrations = new Map<string, Integration>();
@@ -15,6 +20,7 @@ export class MemoryStore implements SessionStore {
   public readonly events = new Map<string, SessionEvent[]>();
   public readonly calls = new Map<string, ToolCallRecord>();
   private readonly capacity = new Map<string, number>();
+  private readonly rateLimits = new Map<string, { count: number; windowStartedAt: number }>();
 
   public async getIntegration(id: string) {
     return this.integrations.get(id) ?? null;
@@ -66,10 +72,12 @@ export class MemoryStore implements SessionStore {
     to: SessionStatus;
     eventType: SessionEventType;
     eventData?: Record<string, unknown>;
-    patch?: Partial<DemoSession>;
+    patch?: SessionTransitionPatch;
+    leaseOwner?: string;
   }) {
     const current = this.sessions.get(options.sessionId);
     if (!current || !options.from.includes(current.status)) return null;
+    if (options.leaseOwner && current.leaseOwner !== options.leaseOwner) return null;
     const updated = {
       ...current,
       ...options.patch,
@@ -88,11 +96,30 @@ export class MemoryStore implements SessionStore {
   public async claimLease(sessionId: string, owner: string, leaseExpiresAt: string) {
     const session = this.sessions.get(sessionId);
     if (!session || TERMINAL_SESSION_STATUSES.has(session.status)) return null;
-    const updated = { ...session, leaseOwner: owner, leaseExpiresAt };
+    const now = new Date().toISOString();
+    if (session.leaseExpiresAt && session.leaseExpiresAt > now && session.leaseOwner !== owner)
+      return null;
+    const updated = {
+      ...session,
+      leaseOwner: owner,
+      leaseExpiresAt,
+      lastHeartbeatAt: now,
+      updatedAt: now
+    };
     this.sessions.set(sessionId, updated);
     return updated;
   }
-  public async heartbeat() {
+  public async heartbeat(sessionId: string, owner: string, leaseExpiresAt: string) {
+    const session = this.sessions.get(sessionId);
+    if (!session || session.leaseOwner !== owner || TERMINAL_SESSION_STATUSES.has(session.status))
+      return false;
+    const now = new Date().toISOString();
+    this.sessions.set(sessionId, {
+      ...session,
+      leaseExpiresAt,
+      lastHeartbeatAt: now,
+      updatedAt: now
+    });
     return true;
   }
   public async listExpiredSessions(now: string, limit: number) {
@@ -130,9 +157,14 @@ export class MemoryStore implements SessionStore {
     error?: string;
     eventType: SessionEventType;
     eventData: Record<string, unknown>;
+    leaseOwner: string;
   }) {
+    const session = this.sessions.get(options.sessionId);
+    if (!session || session.leaseOwner !== options.leaseOwner) return false;
     const call = this.calls.get(options.callId);
     if (!call) throw new Error("Tool call not found");
+    if (call.sessionId !== options.sessionId) throw new Error("Tool call session mismatch");
+    if (call.status !== "running") return false;
     this.calls.set(options.callId, {
       ...call,
       status: options.status,
@@ -140,5 +172,38 @@ export class MemoryStore implements SessionStore {
       ...(options.error ? { error: options.error } : {})
     });
     await this.appendEvent(options.sessionId, options.eventType, options.eventData);
+    return true;
+  }
+  public async consumeRateLimit(options: {
+    scope: string;
+    key: string;
+    limit: number;
+    windowSeconds: number;
+    now?: Date;
+  }): Promise<RateLimitResult> {
+    if (!Number.isSafeInteger(options.limit) || options.limit < 1)
+      throw new Error("Rate limit must be a positive integer");
+    if (!Number.isSafeInteger(options.windowSeconds) || options.windowSeconds < 1)
+      throw new Error("Rate limit window must be a positive integer");
+    const now = (options.now ?? new Date()).getTime();
+    const mapKey = `${options.scope}\0${options.key}`;
+    const current = this.rateLimits.get(mapKey);
+    const duration = options.windowSeconds * 1_000;
+    const windowStartedAt =
+      current && current.windowStartedAt <= now && now < current.windowStartedAt + duration
+        ? current.windowStartedAt
+        : now;
+    const count = windowStartedAt === current?.windowStartedAt ? current.count : 0;
+    const retryAfterSeconds = Math.max(1, Math.ceil((windowStartedAt + duration - now) / 1_000));
+    if (count >= options.limit) return { allowed: false, remaining: 0, retryAfterSeconds };
+    this.rateLimits.set(mapKey, { count: count + 1, windowStartedAt });
+    return {
+      allowed: true,
+      remaining: Math.max(0, options.limit - count - 1),
+      retryAfterSeconds
+    };
+  }
+  public async healthCheck() {
+    return;
   }
 }
