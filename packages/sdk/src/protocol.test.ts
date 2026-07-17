@@ -39,4 +39,64 @@ describe("embed protocol validation", () => {
       }).viewerUrl
     ).toBe("https://app.steel.dev/sessions/1");
   });
+
+  it.each([
+    ["missing session ID", { sessionId: undefined }],
+    ["empty access token", { accessToken: "" }],
+    ["invalid expiry", { expiresAt: "tomorrow" }],
+    ["non-HTTP event URL", { eventsUrl: "javascript:alert(1)" }],
+    ["credential-bearing view URL", { viewUrl: "https://user:pass@api.example.com/view" }]
+  ])("rejects a create response with %s", (_label, override) => {
+    expect(() =>
+      parseCreateSessionResponse({
+        sessionId: "id",
+        accessToken: "token",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        eventsUrl: "https://api.example.com/events",
+        viewUrl: "https://api.example.com/view",
+        ...override
+      })
+    ).toThrow();
+  });
+
+  it.each([
+    ["array root", []],
+    ["missing data", { data: undefined }],
+    ["fractional sequence", { sequence: 1.5 }],
+    ["negative sequence", { sequence: -1 }],
+    ["invalid timestamp", { createdAt: "2099" }],
+    ["oversized type", { type: "x".repeat(101) }]
+  ])("rejects an event with %s", (_label, value) => {
+    const base = {
+      schemaVersion: 1,
+      id: "1",
+      sessionId: "id",
+      sequence: 1,
+      type: "session.completed",
+      data: {},
+      createdAt: "2099-01-01T00:00:00.000Z"
+    };
+    expect(() => parseSessionEvent(Array.isArray(value) ? value : { ...base, ...value })).toThrow();
+  });
+
+  it("accepts localhost API endpoints for local SDK development", () => {
+    expect(
+      parseCreateSessionResponse({
+        sessionId: "id",
+        accessToken: "token",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        eventsUrl: "http://localhost:8080/v1/events",
+        viewUrl: "http://127.0.0.1:8080/v1/view"
+      })
+    ).toMatchObject({ sessionId: "id" });
+  });
+
+  it("rejects lookalike Steel domains", () => {
+    expect(() =>
+      parseViewResponse({
+        viewerUrl: "https://steel.dev.evil.example/sessions/1",
+        expiresAt: "2099-01-01T00:00:00.000Z"
+      })
+    ).toThrow("Untrusted");
+  });
 });

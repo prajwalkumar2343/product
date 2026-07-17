@@ -19,8 +19,8 @@ export interface DemoEvent {
 export function parseCreateSessionResponse(value: unknown): CreateResponse {
   const record = requireRecord(value, "create-session response");
   return {
-    sessionId: requireString(record.sessionId, "sessionId"),
-    accessToken: requireString(record.accessToken, "accessToken"),
+    sessionId: requireString(record.sessionId, "sessionId", 200),
+    accessToken: requireString(record.accessToken, "accessToken", 8_192),
     expiresAt: requireDateTime(record.expiresAt, "expiresAt"),
     eventsUrl: requireHttpUrl(record.eventsUrl, "eventsUrl"),
     viewUrl: requireHttpUrl(record.viewUrl, "viewUrl")
@@ -36,10 +36,10 @@ export function parseSessionEvent(value: unknown): DemoEvent {
   if (record.schemaVersion !== 1) throw new Error("Unsupported event schema version");
   return {
     schemaVersion: 1,
-    id: requireString(record.id, "event.id"),
-    sessionId: requireString(record.sessionId, "event.sessionId"),
+    id: requireString(record.id, "event.id", 200),
+    sessionId: requireString(record.sessionId, "event.sessionId", 200),
     sequence: Number(sequence),
-    type: requireString(record.type, "event.type"),
+    type: requireString(record.type, "event.type", 100),
     data,
     createdAt: requireDateTime(record.createdAt, "event.createdAt")
   };
@@ -64,14 +64,16 @@ function requireRecord(value: unknown, field: string): Record<string, unknown> {
   return value as Record<string, unknown>;
 }
 
-function requireString(value: unknown, field: string): string {
-  if (typeof value !== "string" || value.length === 0) throw new Error(`Invalid ${field}`);
+function requireString(value: unknown, field: string, maximum = 4_096): string {
+  if (typeof value !== "string" || value.length === 0 || value.length > maximum)
+    throw new Error(`Invalid ${field}`);
   return value;
 }
 
 function requireDateTime(value: unknown, field: string): string {
   const text = requireString(value, field);
-  if (!Number.isFinite(Date.parse(text))) throw new Error(`Invalid ${field}`);
+  if (!/^\d{4}-\d{2}-\d{2}T/.test(text) || !Number.isFinite(Date.parse(text)))
+    throw new Error(`Invalid ${field}`);
   return text;
 }
 
