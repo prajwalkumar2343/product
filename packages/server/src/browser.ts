@@ -15,6 +15,12 @@ export interface PageElement {
   inputKey: string | null;
 }
 
+export interface FocusTarget {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 export class DemoBrowser {
   private readonly refs = new Map<
     string,
@@ -159,6 +165,32 @@ export class DemoBrowser {
     await this.page.waitForLoadState("domcontentloaded", { timeout: 5_000 }).catch(() => undefined);
     assertAllowedUrl(this.page.url(), this.integration.allowedHosts);
     return { url: this.page.url() };
+  }
+
+  public async focus(ref: string): Promise<FocusTarget> {
+    const locator = this.page.locator(this.requireRef(ref).selector);
+    await locator.scrollIntoViewIfNeeded();
+    const [bounds, viewport] = await Promise.all([
+      locator.boundingBox(),
+      this.page.evaluate(() => ({ width: window.innerWidth, height: window.innerHeight }))
+    ]);
+    if (
+      !bounds ||
+      bounds.width <= 0 ||
+      bounds.height <= 0 ||
+      viewport.width <= 0 ||
+      viewport.height <= 0
+    ) {
+      throw new Error("Cannot focus a hidden target");
+    }
+    const widthRatio = Math.min(1, bounds.width / viewport.width);
+    const heightRatio = Math.min(1, bounds.height / viewport.height);
+    const scale = Math.min(1.5, Math.max(1.15, 0.42 / Math.max(widthRatio, heightRatio)));
+    return {
+      x: Math.min(1, Math.max(0, (bounds.x + bounds.width / 2) / viewport.width)),
+      y: Math.min(1, Math.max(0, (bounds.y + bounds.height / 2) / viewport.height)),
+      scale
+    };
   }
 
   public async typeFixture(ref: string, fixtureKey: string): Promise<{ typed: true }> {

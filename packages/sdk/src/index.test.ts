@@ -142,6 +142,43 @@ describe("embed session lifecycle", () => {
     await vi.waitFor(() => expect(received).toEqual([1, 2]));
   });
 
+  it("surfaces stable loading states and resets model-directed focus on the next action", async () => {
+    const sessionId = "ses_12345678901234567890123456789012";
+    let streamController!: ReadableStreamDefaultController<Uint8Array>;
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        streamController = controller;
+      }
+    });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(responseFor(sessionId), { status: 202 }))
+      .mockResolvedValueOnce(new Response(stream));
+    const element = configuredElement(fetchMock);
+
+    await element.start("Show analytics");
+    expect(element.dataset.status).toBe("loading");
+
+    streamController.enqueue(
+      encodedEvents(
+        demoEvent(sessionId, 1, "session.running"),
+        demoEvent(sessionId, 2, "agent.focus", { x: 0.35, y: 0.65, scale: 1.4 })
+      )
+    );
+    await vi.waitFor(() => {
+      expect(element.dataset.status).toBe("active");
+      expect(element.dataset.focused).toBe("true");
+    });
+
+    streamController.enqueue(
+      encodedEvents(demoEvent(sessionId, 3, "agent.action_started", { name: "click_element" }))
+    );
+    await vi.waitFor(() => expect(element.dataset.focused).toBeUndefined());
+
+    streamController.enqueue(encodedEvents(demoEvent(sessionId, 4, "session.completed")));
+    await vi.waitFor(() => expect(element.dataset.status).toBe("complete"));
+  });
+
   it("rejects an event that belongs to another session", async () => {
     const sessionId = "ses_12345678901234567890123456789012";
     const foreign = {
@@ -192,6 +229,28 @@ describe("embed session lifecycle", () => {
     expect(cancel?.[1]).toMatchObject({ method: "DELETE", keepalive: true });
   });
 
+  it("deduplicates concurrent close calls without cancelling or emitting twice", async () => {
+    const sessionId = "ses_12345678901234567890123456789012";
+    const pendingStream = new ReadableStream<Uint8Array>({ start() {} });
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValueOnce(Response.json(responseFor(sessionId), { status: 202 }))
+      .mockResolvedValueOnce(new Response(pendingStream))
+      .mockResolvedValueOnce(new Response(null, { status: 202 }));
+    const element = configuredElement(fetchMock);
+    const closed = vi.fn();
+    element.addEventListener("product-demo:close", closed);
+    await element.start("Show analytics");
+    const first = element.close();
+    const second = element.close();
+    expect(second).toBe(first);
+    await first;
+    expect(closed).toHaveBeenCalledOnce();
+    expect(
+      fetchMock.mock.calls.filter((call) => (call[1] as RequestInit).method === "DELETE")
+    ).toHaveLength(1);
+  });
+
   it("restores page scroll state and focus after close", async () => {
     const trigger = document.createElement("button");
     document.body.append(trigger);
@@ -228,4 +287,27 @@ function configuredElement(fetch: typeof globalThis.fetch) {
   });
   document.body.append(element);
   return element;
+}
+
+function demoEvent(
+  sessionId: string,
+  sequence: number,
+  type: string,
+  data: Record<string, unknown> = {}
+) {
+  return {
+    schemaVersion: 1,
+    id: String(sequence),
+    sessionId,
+    sequence,
+    type,
+    data,
+    createdAt: "2099-01-01T00:00:00.000Z"
+  };
+}
+
+function encodedEvents(...events: unknown[]): Uint8Array {
+  return new TextEncoder().encode(
+    events.map((event) => `data: ${JSON.stringify(event)}\n\n`).join("")
+  );
 }

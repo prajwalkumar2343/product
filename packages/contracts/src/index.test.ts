@@ -3,7 +3,9 @@ import {
   CreateSessionRequestSchema,
   DemoSessionSchema,
   FeatureRouteSchema,
-  IntegrationSchema
+  IntegrationSchema,
+  SessionEventTypeSchema,
+  ToolNameSchema
 } from "./index.js";
 
 describe("shared production contracts", () => {
@@ -68,6 +70,11 @@ describe("shared production contracts", () => {
 
   it("rejects malformed request hashes", () => {
     expect(() => DemoSessionSchema.parse({ ...session(), requestHash: "short" })).toThrow();
+  });
+
+  it("includes the model-directed focus tool and event in the shared contract", () => {
+    expect(ToolNameSchema.parse("focus_element")).toBe("focus_element");
+    expect(SessionEventTypeSchema.parse("agent.focus")).toBe("agent.focus");
   });
 });
 

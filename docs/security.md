@@ -21,6 +21,11 @@ Clicks use ephemeral references returned by the latest page inspection and are d
 
 The branded cursor is inert presentation, not a new control channel. Its host is accessibility-hidden, cannot receive pointer events or focus, contains no session data, and is isolated with a closed Shadow DOM. It follows only browser actions that have already passed the existing capability policy. Steel's viewer remains non-interactive, and its native system cursor is disabled to prevent an ambiguous second pointer.
 
+Model-directed focus is also presentation-only. The model can reference only a fresh inspected
+element ID; the private runner resolves that reference and emits bounded normalized geometry. The
+public SDK receives no selector, page content, URL, or DOM access, and clamps focus events again
+before applying a temporary transform to the cross-origin viewer.
+
 ## Known boundary and hardening before public traffic
 
 UI text matching is defense in depth, not a substitute for tenant isolation. Before onboarding a product, test every configured feature and remove destructive permissions at the demo account/backend layer. Configure the demo application's CSP `frame-ancestors` so it can render in Steel as needed, and verify Steel's viewer is permitted by the customer's CSP.

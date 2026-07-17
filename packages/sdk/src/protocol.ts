@@ -16,6 +16,12 @@ export interface DemoEvent {
   createdAt: string;
 }
 
+export interface FocusEventData {
+  x: number;
+  y: number;
+  scale: number;
+}
+
 export function parseCreateSessionResponse(value: unknown): CreateResponse {
   const record = requireRecord(value, "create-session response");
   return {
@@ -30,18 +36,29 @@ export function parseCreateSessionResponse(value: unknown): CreateResponse {
 export function parseSessionEvent(value: unknown): DemoEvent {
   const record = requireRecord(value, "session event");
   const data = requireRecord(record.data, "event.data");
+  const type = requireString(record.type, "event.type", 100);
   const sequence = record.sequence;
   if (!Number.isSafeInteger(sequence) || Number(sequence) < 0)
     throw new Error("Invalid event.sequence");
   if (record.schemaVersion !== 1) throw new Error("Unsupported event schema version");
+  if (type === "agent.focus") parseFocusEventData(data);
   return {
     schemaVersion: 1,
     id: requireString(record.id, "event.id", 200),
     sessionId: requireString(record.sessionId, "event.sessionId", 200),
     sequence: Number(sequence),
-    type: requireString(record.type, "event.type", 100),
+    type,
     data,
     createdAt: requireDateTime(record.createdAt, "event.createdAt")
+  };
+}
+
+export function parseFocusEventData(value: unknown): FocusEventData {
+  const record = requireRecord(value, "focus event data");
+  return {
+    x: requireBoundedNumber(record.x, "focus.x", 0, 1),
+    y: requireBoundedNumber(record.y, "focus.y", 0, 1),
+    scale: requireBoundedNumber(record.scale, "focus.scale", 1, 1.5)
   };
 }
 
@@ -66,6 +83,17 @@ function requireRecord(value: unknown, field: string): Record<string, unknown> {
 
 function requireString(value: unknown, field: string, maximum = 4_096): string {
   if (typeof value !== "string" || value.length === 0 || value.length > maximum)
+    throw new Error(`Invalid ${field}`);
+  return value;
+}
+
+function requireBoundedNumber(
+  value: unknown,
+  field: string,
+  minimum: number,
+  maximum: number
+): number {
+  if (typeof value !== "number" || !Number.isFinite(value) || value < minimum || value > maximum)
     throw new Error(`Invalid ${field}`);
   return value;
 }

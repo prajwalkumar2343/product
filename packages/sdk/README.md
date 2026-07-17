@@ -89,6 +89,11 @@ stopListening();
 
 Supported events are `open`, `started`, `event`, `error`, and `closed`.
 
+The embedded interface automatically presents session lifecycle feedback, reconnecting states, and
+model-directed focus moments. Focus is visual only: the runner sends bounded normalized geometry,
+the viewer briefly zooms toward the important detail, and the view resets on the next action or
+after a short hold. Reduced-motion preferences replace the zoom with a stationary emphasis.
+
 ## Turnstile
 
 If the integration requires Cloudflare Turnstile, provide a callback that returns a short-lived

@@ -1,10 +1,12 @@
 import { ProductDemoClient } from "./client.js";
+import { productDemoTemplate } from "./element-view.js";
 import { ProductDemoApiError, ProductDemoError } from "./errors.js";
-import { parseSessionEvent, type CreateResponse, type DemoEvent } from "./protocol.js";
-
-const styles = `
-:host{--pd-bg:#0b1020;--pd-fg:#f8fafc;--pd-accent:#2563eb;--pd-muted:#aab2c5;display:inline-block;font:14px/1.45 ui-sans-serif,system-ui,sans-serif;color:var(--pd-fg)}:host([external-trigger]){display:none}button,input{font:inherit}.launch{border:0;border-radius:10px;padding:11px 18px;background:var(--pd-accent);color:#fff;font-weight:700;cursor:pointer}.launch:focus-visible,.close:focus-visible,input:focus-visible,.send:focus-visible{outline:3px solid #a5b4fc;outline-offset:2px}.shell[hidden]{display:none}.shell{position:fixed;inset:0;z-index:2147483000;background:#020617c7;display:grid;place-items:center;padding:20px}.panel{width:min(1180px,100%);height:min(780px,calc(100dvh - 40px));background:var(--pd-bg);border:1px solid #26304a;border-radius:16px;box-shadow:0 24px 80px #0009;overflow:hidden;display:grid;grid-template-rows:auto 1fr auto}.top{display:flex;align-items:center;gap:12px;padding:12px 14px;border-bottom:1px solid #26304a}.title{font-weight:750;flex:1}.status{color:var(--pd-muted);font-size:13px}.close{border:0;background:transparent;color:var(--pd-fg);font-size:24px;cursor:pointer}.stage{position:relative;min-height:0}.stage iframe{width:100%;height:100%;border:0;background:#fff}.empty{position:absolute;inset:0;display:grid;place-items:center;text-align:center;padding:28px;color:var(--pd-muted)}.composer{display:flex;gap:8px;padding:10px;border-top:1px solid #26304a}.composer input{min-width:0;flex:1;border:1px solid #3a4665;border-radius:9px;background:#11182b;color:var(--pd-fg);padding:9px 11px}.send{border:0;border-radius:9px;background:#26304a;color:var(--pd-fg);padding:8px 14px;cursor:pointer}.goal{position:absolute;inset:0;display:grid;place-items:center;background:var(--pd-bg);padding:24px}.goal[hidden]{display:none}.goal form{width:min(520px,100%)}.goal h2{margin:0 0 8px;font-size:24px}.goal p{color:var(--pd-muted)}.goal input{box-sizing:border-box;width:100%;border:1px solid #3a4665;border-radius:10px;background:#11182b;color:var(--pd-fg);padding:12px;margin:8px 0 12px}.goal button{width:100%;border:0;border-radius:10px;background:var(--pd-accent);color:#fff;padding:12px;font-weight:700;cursor:pointer}@media(max-width:640px){.shell{padding:0}.panel{width:100%;height:100dvh;border-radius:0;border:0}.status{max-width:45%;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}}
-`;
+import {
+  parseFocusEventData,
+  parseSessionEvent,
+  type CreateResponse,
+  type DemoEvent
+} from "./protocol.js";
 
 export interface ProductDemoElementOptions {
   client: ProductDemoClient;
@@ -25,6 +27,8 @@ export class ProductDemoElement extends HTMLElementBase {
   #controller: AbortController | undefined;
   #session: CreateResponse | undefined;
   #startPromise: Promise<{ sessionId: string }> | undefined;
+  #closePromise: Promise<void> | undefined;
+  #focusTimer: ReturnType<typeof setTimeout> | undefined;
   #lastSequence = 0;
   #terminal = false;
   #initialized = false;
@@ -35,7 +39,8 @@ export class ProductDemoElement extends HTMLElementBase {
   public constructor() {
     super();
     this.#root = this.attachShadow({ mode: "closed" });
-    this.#root.innerHTML = `<style>${styles}</style><button class="launch" type="button"><slot>See AI demo</slot></button><div class="shell" hidden role="dialog" aria-modal="true" aria-labelledby="pd-title" aria-describedby="pd-status"><section class="panel"><header class="top"><span class="title" id="pd-title">Live AI product demo</span><span class="status" id="pd-status" role="status" aria-live="polite">Ready</span><button class="close" type="button" aria-label="Close demo">×</button></header><main class="stage"><div class="empty">Preparing your secure live browser…</div><div class="goal"><form><h2>What would you like to see?</h2><p>The AI will demonstrate that workflow in a live demo environment.</p><input required minlength="3" maxlength="1000" autocomplete="off" aria-label="Demo goal" placeholder="For example: show me how analytics filters work"><button type="submit">Start live demo</button></form></div></main><form class="composer"><input aria-label="Send an update" maxlength="1000" autocomplete="off" placeholder="Ask the demo to show something else"><button class="send" type="submit">Send</button></form></section></div>`;
+    this.#root.innerHTML = productDemoTemplate;
+    this.dataset.status = "idle";
   }
 
   public connectedCallback(): void {
@@ -58,6 +63,7 @@ export class ProductDemoElement extends HTMLElementBase {
 
   public disconnectedCallback(): void {
     this.#controller?.abort();
+    this.resetFocus();
     this.restorePage();
   }
 
@@ -81,6 +87,11 @@ export class ProductDemoElement extends HTMLElementBase {
     this.#previousOverflow = document.documentElement.style.overflow;
     document.documentElement.style.overflow = "hidden";
     shell.hidden = false;
+    shell.dataset.open = "false";
+    requestAnimationFrame(() => {
+      if (!shell.hidden) shell.dataset.open = "true";
+    });
+    this.clearNotice();
     this.input(".goal input").focus();
     this.emit("product-demo:open", undefined);
   }
@@ -100,7 +111,16 @@ export class ProductDemoElement extends HTMLElementBase {
     return promise;
   }
 
-  public async close(): Promise<void> {
+  public close(): Promise<void> {
+    if (this.#closePromise) return this.#closePromise;
+    const promise = this.closeOnce().finally(() => {
+      if (this.#closePromise === promise) this.#closePromise = undefined;
+    });
+    this.#closePromise = promise;
+    return promise;
+  }
+
+  private async closeOnce(): Promise<void> {
     const shell = this.element<HTMLElement>(".shell");
     if (shell.hidden && !this.#session && !this.#startPromise) return;
     const generation = ++this.#generation;
@@ -110,16 +130,24 @@ export class ProductDemoElement extends HTMLElementBase {
     this.#session = undefined;
     this.#terminal = true;
     this.#lastSequence = 0;
+    this.resetFocus();
+    shell.dataset.open = "false";
+    await this.waitForCloseTransition();
     shell.hidden = true;
     this.element<HTMLElement>(".empty").hidden = false;
     this.element<HTMLElement>(".goal").hidden = false;
+    const stage = this.element<HTMLElement>(".stage");
+    stage.removeAttribute("data-viewer-ready");
+    stage.setAttribute("aria-busy", "false");
     this.#root.querySelector("iframe")?.remove();
+    this.setComposerEnabled(false);
+    this.clearNotice();
     this.restorePage();
     if (session && client)
       await client.cancel(session, true).catch(() => {
         // The server expires abandoned sessions; closing the host UI must remain reliable.
       });
-    if (generation === this.#generation) this.setStatus("Ready");
+    if (generation === this.#generation) this.setStatus("Ready", "idle");
     this.emit("product-demo:close", undefined);
   }
 
@@ -141,11 +169,16 @@ export class ProductDemoElement extends HTMLElementBase {
       throw error;
     }
     try {
+      this.setComposerEnabled(false);
+      this.setStatus("Sending your update…", "loading");
       await this.#client.sendMessage(this.#session, value, this.#controller?.signal);
       if (message === undefined) input.value = "";
+      if (!this.#terminal) this.setStatus("AI is demonstrating", "active");
     } catch (error) {
       this.reportError(error, "Could not send that update");
       throw error;
+    } finally {
+      if (this.#session && !this.#terminal) this.setComposerEnabled(true);
     }
   }
 
@@ -161,8 +194,13 @@ export class ProductDemoElement extends HTMLElementBase {
     const generation = ++this.#generation;
     const client = this.client();
     this.open();
-    this.setStatus("Starting secure browser…");
-    this.button(".goal button").disabled = true;
+    this.setStatus("Starting secure browser…", "loading");
+    this.setLoadingCopy("Creating a secure browser session…");
+    this.clearNotice();
+    const startButton = this.button(".goal-submit");
+    startButton.disabled = true;
+    this.element<HTMLElement>(".goal-submit span").textContent = "Starting…";
+    this.element<HTMLElement>(".stage").setAttribute("aria-busy", "true");
     this.#lastSequence = 0;
     this.#terminal = false;
     this.#controller?.abort();
@@ -182,6 +220,7 @@ export class ProductDemoElement extends HTMLElementBase {
       }
       this.#session = session;
       this.element<HTMLElement>(".goal").hidden = true;
+      this.setComposerEnabled(true);
       this.emit("product-demo:start", { sessionId: session.sessionId });
       void this.consumeEvents(session, controller.signal, generation).catch((error: unknown) => {
         if (!controller.signal.aborted) this.reportError(error, "The live connection stopped");
@@ -189,12 +228,14 @@ export class ProductDemoElement extends HTMLElementBase {
       return { sessionId: session.sessionId };
     } catch (error) {
       if (!controller.signal.aborted) {
+        this.element<HTMLElement>(".stage").setAttribute("aria-busy", "false");
         this.reportError(error, "Could not start the demo");
         throw error;
       }
       throw new ProductDemoError("Demo start was aborted", { code: "aborted", cause: error });
     } finally {
-      this.button(".goal button").disabled = false;
+      startButton.disabled = false;
+      this.element<HTMLElement>(".goal-submit span").textContent = "Start live demo";
     }
   }
 
@@ -226,13 +267,16 @@ export class ProductDemoElement extends HTMLElementBase {
           this.#terminal = true;
           return;
         }
-        this.setStatus("Reconnecting…");
+        this.setStatus("Reconnecting to the live demo…", "reconnecting");
+        this.setLoadingCopy("The connection paused. Rejoining securely…");
         await delay(Math.min(10_000, 500 * 2 ** Math.min(attempt++, 5)), signal);
       }
     }
     if (!signal.aborted && !this.#terminal && Date.now() >= Date.parse(session.expiresAt)) {
       this.#terminal = true;
-      this.setStatus("Demo expired");
+      this.resetFocus();
+      this.setComposerEnabled(false);
+      this.setStatus("Demo expired", "error");
     }
   }
 
@@ -294,28 +338,39 @@ export class ProductDemoElement extends HTMLElementBase {
 
   private handleEvent(event: DemoEvent): void {
     this.#lastSequence = event.sequence;
-    const labels: Record<string, string> = {
-      "session.starting": "Starting browser…",
-      "session.viewer_ready": "Browser ready",
-      "session.running": "AI is demonstrating",
-      "session.completed": "Demo complete",
-      "session.failed": "Demo stopped",
-      "session.cancelled": "Demo cancelled",
-      "session.expired": "Demo expired"
+    const labels: Record<string, { message: string; tone: StatusTone }> = {
+      "session.starting": { message: "Starting secure browser…", tone: "loading" },
+      "session.viewer_ready": { message: "Connecting live view…", tone: "loading" },
+      "session.running": { message: "AI is demonstrating", tone: "active" },
+      "session.completed": { message: "Demo complete", tone: "complete" },
+      "session.failed": { message: "Demo stopped", tone: "error" },
+      "session.cancelled": { message: "Demo cancelled", tone: "idle" },
+      "session.expired": { message: "Demo expired", tone: "error" }
     };
     const label = labels[event.type];
-    if (label) this.setStatus(label);
+    if (label) this.setStatus(label.message, label.tone);
+    if (event.type === "session.starting")
+      this.setLoadingCopy("Launching a clean demo environment…");
+    if (event.type === "session.viewer_ready")
+      this.setLoadingCopy("Connecting the secure live view…");
     if (event.type === "session.viewer_ready") void this.attachViewer(this.#generation);
+    if (event.type === "agent.focus") this.applyFocus(event);
+    if (event.type === "agent.action_started" && event.data.name !== "focus_element")
+      this.resetFocus();
     if (event.type === "agent.narration")
       this.setStatus(
-        typeof event.data.message === "string" ? event.data.message : "AI is demonstrating"
+        typeof event.data.message === "string" ? event.data.message : "AI is demonstrating",
+        "active"
       );
     if (
       ["session.completed", "session.failed", "session.cancelled", "session.expired"].includes(
         event.type
       )
-    )
+    ) {
       this.#terminal = true;
+      this.resetFocus();
+      this.setComposerEnabled(false);
+    }
     this.emit("product-demo:event", event);
   }
 
@@ -335,8 +390,19 @@ export class ProductDemoElement extends HTMLElementBase {
       iframe.title = "Live AI-controlled product browser";
       iframe.referrerPolicy = "no-referrer";
       iframe.sandbox.add("allow-scripts", "allow-same-origin", "allow-forms", "allow-pointer-lock");
+      iframe.addEventListener(
+        "load",
+        () => {
+          if (generation !== this.#generation || this.#session !== session) return;
+          const stage = this.element<HTMLElement>(".stage");
+          stage.dataset.viewerReady = "true";
+          stage.setAttribute("aria-busy", "false");
+          this.element<HTMLElement>(".empty").hidden = true;
+          if (!this.#terminal) this.setStatus("AI is demonstrating", "active");
+        },
+        { once: true }
+      );
       iframe.src = viewerUrl;
-      this.element<HTMLElement>(".empty").hidden = true;
       this.element<HTMLElement>(".stage").prepend(iframe);
     } catch (error) {
       if (!this.#controller?.signal.aborted) this.reportError(error, "Browser view is unavailable");
@@ -383,7 +449,9 @@ export class ProductDemoElement extends HTMLElementBase {
 
   private reportError(error: unknown, fallback: string): void {
     const message = error instanceof ProductDemoError ? error.message : fallback;
-    this.setStatus(message);
+    this.setStatus(message, "error");
+    const notice = this.element<HTMLElement>(".notice");
+    notice.textContent = message;
     this.emit("product-demo:error", {
       message,
       ...(error instanceof ProductDemoError
@@ -392,8 +460,46 @@ export class ProductDemoElement extends HTMLElementBase {
     });
   }
 
-  private setStatus(message: string): void {
+  private setStatus(message: string, tone: StatusTone): void {
+    this.dataset.status = tone;
     this.element<HTMLElement>(".status").textContent = message.slice(0, 500);
+  }
+  private setLoadingCopy(message: string): void {
+    this.element<HTMLElement>(".loader-copy").textContent = message;
+  }
+  private setComposerEnabled(enabled: boolean): void {
+    this.input(".composer input").disabled = !enabled;
+    this.button(".send").disabled = !enabled;
+  }
+  private clearNotice(): void {
+    this.element<HTMLElement>(".notice").textContent = "";
+  }
+  private applyFocus(event: DemoEvent): void {
+    const focus = parseFocusEventData(event.data);
+    const stage = this.element<HTMLElement>(".stage");
+    stage.style.setProperty("--pd-focus-x", `${(focus.x * 100).toFixed(2)}%`);
+    stage.style.setProperty("--pd-focus-y", `${(focus.y * 100).toFixed(2)}%`);
+    stage.style.setProperty("--pd-focus-scale", focus.scale.toFixed(3));
+    stage.dataset.focused = "true";
+    this.dataset.focused = "true";
+    if (this.#focusTimer) clearTimeout(this.#focusTimer);
+    this.#focusTimer = setTimeout(() => this.resetFocus(), 4_200);
+  }
+  private resetFocus(): void {
+    if (this.#focusTimer) clearTimeout(this.#focusTimer);
+    this.#focusTimer = undefined;
+    const stage = this.#root.querySelector<HTMLElement>(".stage");
+    if (!stage) return;
+    stage.removeAttribute("data-focused");
+    delete this.dataset.focused;
+    stage.style.removeProperty("--pd-focus-x");
+    stage.style.removeProperty("--pd-focus-y");
+    stage.style.removeProperty("--pd-focus-scale");
+  }
+  private async waitForCloseTransition(): Promise<void> {
+    if (typeof matchMedia !== "function" || matchMedia("(prefers-reduced-motion: reduce)").matches)
+      return;
+    await new Promise<void>((resolve) => setTimeout(resolve, 220));
   }
   private input(selector: string): HTMLInputElement {
     return this.element<HTMLInputElement>(selector);
@@ -416,6 +522,8 @@ export class ProductDemoElement extends HTMLElementBase {
     this.dispatchEvent(new CustomEvent(name, { detail, bubbles: true, composed: true }));
   }
 }
+
+type StatusTone = "idle" | "loading" | "active" | "reconnecting" | "complete" | "error";
 
 function delay(milliseconds: number, signal: AbortSignal): Promise<void> {
   return new Promise((resolve, reject) => {

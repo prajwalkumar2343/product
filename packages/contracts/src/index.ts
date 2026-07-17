@@ -184,6 +184,7 @@ export const SessionEventTypeSchema = z.enum([
   "session.cleanup_failed",
   "visitor.message",
   "agent.narration",
+  "agent.focus",
   "agent.action_started",
   "agent.action_completed",
   "agent.action_failed",
@@ -235,6 +236,7 @@ export type DemoSession = z.infer<typeof DemoSessionSchema>;
 export const ToolNameSchema = z.enum([
   "inspect_page",
   "go_to_feature",
+  "focus_element",
   "click_element",
   "type_demo_value",
   "scroll_page",

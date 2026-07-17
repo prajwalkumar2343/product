@@ -38,7 +38,10 @@ describe("demo browser cursor integration", () => {
       innerText: vi.fn().mockResolvedValue("Analytics Apply filter")
     } as unknown as Locator;
     const addInitScript = vi.fn().mockResolvedValue(undefined);
-    const evaluate = vi.fn().mockResolvedValue(undefined);
+    const evaluate = vi
+      .fn()
+      .mockResolvedValueOnce(undefined)
+      .mockResolvedValueOnce({ width: 1_000, height: 500 });
     const page = {
       url: vi.fn().mockReturnValue("https://demo.example.com/analytics"),
       title: vi.fn().mockResolvedValue("Analytics"),
@@ -75,11 +78,12 @@ describe("demo browser cursor integration", () => {
       makeIntegration()
     );
     await demoBrowser.inspect();
+    await expect(demoBrowser.focus("e0")).resolves.toEqual({ x: 0.14, y: 0.11, scale: 1.5 });
     await demoBrowser.click("e0");
 
     expect(addInitScript).toHaveBeenCalledTimes(2);
-    expect(evaluate).toHaveBeenCalledOnce();
-    expect(order).toEqual(["scroll", "move", "settle", "click"]);
+    expect(evaluate).toHaveBeenCalledTimes(2);
+    expect(order).toEqual(["scroll", "scroll", "move", "settle", "click"]);
   });
 });
 

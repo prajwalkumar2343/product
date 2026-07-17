@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import { parseCreateSessionResponse, parseSessionEvent, parseViewResponse } from "./protocol.js";
+import {
+  parseCreateSessionResponse,
+  parseFocusEventData,
+  parseSessionEvent,
+  parseViewResponse
+} from "./protocol.js";
 
 describe("embed protocol validation", () => {
   it("rejects credential-bearing API URLs and unknown event versions", () => {
@@ -98,5 +103,30 @@ describe("embed protocol validation", () => {
         expiresAt: "2099-01-01T00:00:00.000Z"
       })
     ).toThrow("Untrusted");
+  });
+
+  it("accepts only bounded model-directed focus geometry", () => {
+    expect(parseFocusEventData({ x: 0.25, y: 0.8, scale: 1.35 })).toEqual({
+      x: 0.25,
+      y: 0.8,
+      scale: 1.35
+    });
+    expect(() => parseFocusEventData({ x: -0.1, y: 0.5, scale: 1.2 })).toThrow("focus.x");
+    expect(() => parseFocusEventData({ x: 0.5, y: 0.5, scale: 2 })).toThrow("focus.scale");
+    expect(() => parseFocusEventData({ x: "0.5", y: 0.5, scale: 1.2 })).toThrow("focus.x");
+  });
+
+  it("rejects malformed focus geometry at the session event boundary", () => {
+    expect(() =>
+      parseSessionEvent({
+        schemaVersion: 1,
+        id: "1",
+        sessionId: "id",
+        sequence: 1,
+        type: "agent.focus",
+        data: { x: 0.5, y: 0.5, scale: 9 },
+        createdAt: "2099-01-01T00:00:00.000Z"
+      })
+    ).toThrow("focus.scale");
   });
 });

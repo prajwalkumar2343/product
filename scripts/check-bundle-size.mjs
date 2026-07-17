@@ -3,8 +3,9 @@ import { readFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 
 const file = new URL("../packages/sdk/dist/product-demo.js", import.meta.url);
-const maximumBytes = 22_000;
-const maximumGzipBytes = 7_500;
+// The interaction-rich v1 embed remains a single request; keep transfer and parse costs bounded.
+const maximumBytes = 32_000;
+const maximumGzipBytes = 10_500;
 const { size } = await stat(file);
 const gzipSize = gzipSync(await readFile(file), { level: 9 }).byteLength;
 if (size > maximumBytes) {

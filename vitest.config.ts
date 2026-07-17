@@ -7,7 +7,13 @@ export default defineConfig({
       provider: "v8",
       reporter: ["text", "lcov"],
       include: ["packages/*/src/**/*.ts"],
-      exclude: ["**/main.ts", "**/api-main.ts", "**/runner-main.ts"]
+      exclude: ["**/main.ts", "**/api-main.ts", "**/runner-main.ts"],
+      thresholds: {
+        statements: 60,
+        branches: 55,
+        functions: 60,
+        lines: 63
+      }
     }
   }
 });

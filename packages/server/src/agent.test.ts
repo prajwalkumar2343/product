@@ -19,6 +19,13 @@ describe("agent harness", () => {
       {
         toolCall: {
           id: "call-2",
+          name: "focus_element",
+          arguments: { ref: "e0" }
+        }
+      },
+      {
+        toolCall: {
+          id: "call-3",
           name: "finish_demo",
           arguments: { summary: "Analytics filters are now demonstrated." }
         }
@@ -34,7 +41,26 @@ describe("agent harness", () => {
     const browser = {
       async inspect() {
         expect([...store.calls.values()].some((call) => call.status === "running")).toBe(true);
-        return { url: "https://demo.example.com", title: "Demo", text: "Analytics", elements: [] };
+        return {
+          url: "https://demo.example.com",
+          title: "Demo",
+          text: "Analytics",
+          elements: [
+            {
+              ref: "e0",
+              tag: "button",
+              role: null,
+              name: "Filter",
+              type: "button",
+              actionId: "apply_filter",
+              inputKey: null
+            }
+          ]
+        };
+      },
+      async focus(ref: string) {
+        expect(ref).toBe("e0");
+        return { x: 0.4, y: 0.3, scale: 1.35 };
       }
     } as unknown as DemoBrowser;
 
@@ -47,11 +73,15 @@ describe("agent harness", () => {
 
     expect([...store.calls.values()].map((call) => call.status)).toEqual([
       "completed",
+      "completed",
       "completed"
     ]);
     expect(
       (store.events.get(session.id) ?? []).some((event) => event.type === "agent.narration")
     ).toBe(true);
+    expect(
+      (store.events.get(session.id) ?? []).find((event) => event.type === "agent.focus")?.data
+    ).toEqual({ x: 0.4, y: 0.3, scale: 1.35 });
   });
 
   it("does not execute a tool when cancellation wins the race after the model turn", async () => {
