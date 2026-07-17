@@ -33,7 +33,11 @@ export const FeatureRouteSchema = z.object({
     .regex(/^[a-z0-9_-]+$/),
   name: z.string().min(1).max(120),
   description: z.string().min(1).max(1_000),
-  path: z.string().min(1).max(2_000).startsWith("/"),
+  path: z
+    .string()
+    .min(1)
+    .max(2_000)
+    .regex(/^\/(?!\/)[^\s#]*$/, "Expected a same-origin path without a fragment"),
   successHint: z.string().max(500).optional()
 });
 export type FeatureRoute = z.infer<typeof FeatureRouteSchema>;
@@ -105,7 +109,15 @@ export const IntegrationSchema = z
     updatedAt: z.string().datetime()
   })
   .superRefine((integration, context) => {
-    const hostname = new URL(integration.startUrl).hostname.toLowerCase();
+    const startUrl = new URL(integration.startUrl);
+    const hostname = startUrl.hostname.toLowerCase();
+    if (startUrl.protocol !== "https:" || startUrl.username || startUrl.password || startUrl.hash) {
+      context.addIssue({
+        code: "custom",
+        path: ["startUrl"],
+        message: "startUrl must be HTTPS and cannot contain credentials or a fragment"
+      });
+    }
     if (!integration.allowedHosts.includes(hostname)) {
       context.addIssue({
         code: "custom",
@@ -113,13 +125,34 @@ export const IntegrationSchema = z
         message: "startUrl hostname must be present in allowedHosts"
       });
     }
+    for (const [path, values] of [
+      ["allowedOrigins", integration.allowedOrigins],
+      ["allowedHosts", integration.allowedHosts],
+      ["allowedActionIds", integration.allowedActionIds],
+      ["features", integration.features.map((feature) => feature.id)]
+    ] as const) {
+      if (new Set(values).size !== values.length) {
+        context.addIssue({ code: "custom", path: [path], message: `${path} must be unique` });
+      }
+    }
   });
 export type Integration = z.infer<typeof IntegrationSchema>;
 
 export const CreateSessionRequestSchema = z.object({
   goal: z.string().trim().min(3).max(1_000),
   turnstileToken: z.string().min(1).max(4_096).optional(),
-  locale: z.string().min(2).max(35).default("en")
+  locale: z
+    .string()
+    .min(2)
+    .max(35)
+    .refine((locale) => {
+      try {
+        return Intl.getCanonicalLocales(locale).length === 1;
+      } catch {
+        return false;
+      }
+    }, "Expected a valid BCP 47 locale")
+    .default("en")
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
@@ -183,6 +216,7 @@ export const DemoSessionSchema = z.object({
   tokenHash: z.string(),
   traceId: z.string(),
   idempotencyKeyHash: z.string(),
+  requestHash: z.string().length(64).optional(),
   steelSessionId: z.string().optional(),
   viewerUrl: z.string().url().optional(),
   leaseOwner: z.string().optional(),
