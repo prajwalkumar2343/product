@@ -1,11 +1,32 @@
 {
   "name": "@product/embed",
   "version": "0.1.0",
-  "private": true,
   "type": "module",
   "main": "dist/product-demo.js",
+  "module": "dist/product-demo.mjs",
+  "types": "dist-types/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist-types/index.d.ts",
+      "import": "./dist/product-demo.mjs",
+      "default": "./dist/product-demo.js"
+    },
+    "./client": {
+      "types": "./dist-types/client.d.ts",
+      "import": "./dist/client.mjs",
+      "default": "./dist/client.mjs"
+    }
+  },
+  "files": [
+    "dist/*.js",
+    "dist/*.mjs",
+    "dist/*.map",
+    "dist-types/*.d.ts",
+    "dist-types/*.d.ts.map"
+  ],
+  "sideEffects": true,
   "scripts": {
-    "build": "esbuild src/index.ts --bundle --format=iife --target=es2022 --minify --sourcemap --outfile=dist/product-demo.js",
+    "build": "node ../../scripts/build-sdk.mjs",
     "typecheck": "tsc -b --pretty false"
   },
   "dependencies": {}
