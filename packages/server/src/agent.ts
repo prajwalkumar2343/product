@@ -7,35 +7,51 @@ import { buildBoundedModelContext } from "./agent-context.js";
 import type { SessionStore } from "./store.js";
 
 const ToolCallSchema = z.discriminatedUnion("name", [
-  z.object({ name: z.literal("inspect_page"), arguments: z.object({}) }),
-  z.object({
-    name: z.literal("go_to_feature"),
-    arguments: z.object({ featureId: z.string().min(1).max(80) })
-  }),
-  z.object({
-    name: z.literal("click_element"),
-    arguments: z.object({ ref: z.string().regex(/^e\d+$/) })
-  }),
-  z.object({
-    name: z.literal("type_demo_value"),
-    arguments: z.object({ ref: z.string().regex(/^e\d+$/), fixtureKey: z.string().min(1).max(80) })
-  }),
-  z.object({
-    name: z.literal("scroll_page"),
-    arguments: z.object({ direction: z.enum(["up", "down"]) })
-  }),
-  z.object({
-    name: z.literal("wait_for_page"),
-    arguments: z.object({ milliseconds: z.number().int().min(100).max(5_000) })
-  }),
-  z.object({
-    name: z.literal("narrate"),
-    arguments: z.object({ message: z.string().min(1).max(500) })
-  }),
-  z.object({
-    name: z.literal("finish_demo"),
-    arguments: z.object({ summary: z.string().min(1).max(500) })
-  })
+  z.object({ name: z.literal("inspect_page"), arguments: z.object({}).strict() }).strict(),
+  z
+    .object({
+      name: z.literal("go_to_feature"),
+      arguments: z.object({ featureId: z.string().min(1).max(80) }).strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("click_element"),
+      arguments: z.object({ ref: z.string().regex(/^e\d+$/) }).strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("type_demo_value"),
+      arguments: z
+        .object({ ref: z.string().regex(/^e\d+$/), fixtureKey: z.string().min(1).max(80) })
+        .strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("scroll_page"),
+      arguments: z.object({ direction: z.enum(["up", "down"]) }).strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("wait_for_page"),
+      arguments: z.object({ milliseconds: z.number().int().min(100).max(5_000) }).strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("narrate"),
+      arguments: z.object({ message: z.string().min(1).max(500) }).strict()
+    })
+    .strict(),
+  z
+    .object({
+      name: z.literal("finish_demo"),
+      arguments: z.object({ summary: z.string().min(1).max(500) }).strict()
+    })
+    .strict()
 ]);
 
 const InspectResultSchema = z.object({
@@ -187,14 +203,16 @@ export class DemoAgent {
       await this.store.startToolCall(record, session.leaseOwner);
       try {
         const result = await executeTool(parsed, browser, this.store, session.id);
-        await this.store.settleToolCall({
+        const settled = await this.store.settleToolCall({
           sessionId: session.id,
           callId: record.id,
           status: "completed",
           result,
           eventType: "agent.action_completed",
-          eventData: { step, name, callId: record.id }
+          eventData: { step, name, callId: record.id },
+          leaseOwner: session.leaseOwner
         });
+        if (!settled) throw new Error("Session lease lost while settling tool call");
         messages.push({
           role: "assistant",
           content: decision.narration ?? "",
@@ -209,14 +227,17 @@ export class DemoAgent {
       } catch (error) {
         const message = error instanceof Error ? error.message.slice(0, 1_000) : "Tool failed";
         const denied = message.toLowerCase().includes("denied");
-        await this.store.settleToolCall({
+        const settled = await this.store.settleToolCall({
           sessionId: session.id,
           callId: record.id,
           status: denied ? "denied" : "failed",
           error: message,
           eventType: denied ? "security.blocked" : "agent.action_failed",
-          eventData: { step, name, message, callId: record.id }
+          eventData: { step, name, message, callId: record.id },
+          leaseOwner: session.leaseOwner
         });
+        if (!settled)
+          throw new Error("Session lease lost while settling tool call", { cause: error });
         messages.push({
           role: "tool",
           content: JSON.stringify({ error: message }),

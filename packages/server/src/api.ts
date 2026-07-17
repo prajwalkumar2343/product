@@ -36,6 +36,10 @@ const TurnstileResponseSchema = z.object({
   hostname: z.string().optional(),
   action: z.string().optional()
 });
+const EventsQuerySchema = z.object({
+  after: z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER).default(0)
+});
+const LastEventIdSchema = z.coerce.number().int().min(0).max(Number.MAX_SAFE_INTEGER);
 
 export function buildApi(dependencies: ApiDependencies) {
   const { config, store, tasks } = dependencies;
@@ -66,6 +70,14 @@ export function buildApi(dependencies: ApiDependencies) {
   });
 
   app.get("/healthz", () => ({ ok: true }));
+  app.get("/readyz", async (_request, reply) => {
+    try {
+      await store.healthCheck();
+      return { ok: true };
+    } catch {
+      return reply.code(503).send({ ok: false });
+    }
+  });
   app.setNotFoundHandler((_request, reply) => reply.code(404).send({ error: "not_found" }));
   app.setErrorHandler((error, request, reply) => {
     request.log.error({ err: error, requestId: request.id }, "unhandled API error");
@@ -99,6 +111,19 @@ export function buildApi(dependencies: ApiDependencies) {
       const idempotencyKey = readSingleHeader(request, "idempotency-key");
       if (!idempotencyKey || idempotencyKey.length < 16 || idempotencyKey.length > 200)
         return reply.code(400).send({ error: "invalid_idempotency_key" });
+      const distributedLimit = await store.consumeRateLimit({
+        scope: "session-create",
+        key: `${integration.id}\0${request.ip}`,
+        limit: 12,
+        windowSeconds: 60
+      });
+      if (!distributedLimit.allowed) {
+        reply.header("Retry-After", String(distributedLimit.retryAfterSeconds));
+        return reply.code(429).send({
+          error: "rate_limited",
+          retryAfterSeconds: distributedLimit.retryAfterSeconds
+        });
+      }
       if (
         integration.turnstileRequired &&
         !(await dependencies.verifyChallenge(
@@ -115,9 +140,10 @@ export function buildApi(dependencies: ApiDependencies) {
         idempotencyKey
       );
       const accessToken = tokens.issue(sessionId, idempotencyKey);
+      const requestHash = sessionRequestHash(parsed.data.goal, parsed.data.locale);
       const existing = await store.getSession(sessionId);
       if (existing) {
-        if (existing.origin !== origin || existing.idempotencyKeyHash !== hashValue(idempotencyKey))
+        if (!isIdempotentReplay(existing, origin, idempotencyKey, requestHash))
           return reply.code(409).send({ error: "idempotency_conflict" });
         return reply.code(200).send(responseFor(config, existing, accessToken));
       }
@@ -136,14 +162,24 @@ export function buildApi(dependencies: ApiDependencies) {
         tokenHash: hashValue(accessToken),
         traceId: crypto.randomUUID(),
         idempotencyKeyHash: hashValue(idempotencyKey),
+        requestHash,
         eventSequence: 0,
         createdAt: now.toISOString(),
         updatedAt: now.toISOString(),
         expiresAt
       };
       const admission = await store.admitSession(session, integration.maxConcurrentSessions);
-      if (admission === "capacity")
+      if (admission === "capacity") {
+        reply.header("Retry-After", "10");
         return reply.code(429).send({ error: "integration_at_capacity", retryAfterSeconds: 10 });
+      }
+      if (admission === "exists") {
+        const admitted = await store.getSession(session.id);
+        if (!admitted) throw new Error("Idempotent session disappeared after admission");
+        if (!isIdempotentReplay(admitted, origin, idempotencyKey, requestHash))
+          return reply.code(409).send({ error: "idempotency_conflict" });
+        return reply.code(200).send(responseFor(config, admitted, accessToken));
+      }
       if (admission === "admitted") {
         try {
           await tasks.enqueueSession(session.id);
@@ -170,7 +206,8 @@ export function buildApi(dependencies: ApiDependencies) {
           return reply.code(503).send({ error: "temporarily_unavailable" });
         }
       }
-      return reply.code(202).send(responseFor(config, session, accessToken));
+      const persisted = await store.getSession(session.id);
+      return reply.code(202).send(responseFor(config, persisted ?? session, accessToken));
     }
   );
 
@@ -186,14 +223,17 @@ export function buildApi(dependencies: ApiDependencies) {
     const session = await authorizeSession(request, reply, store, tokens);
     if (!session) return;
     applyCors(reply, session.origin, "GET, OPTIONS");
-    const after = Math.max(0, Number((request.query as { after?: string }).after ?? 0) || 0);
-    return { events: await store.listEvents(session.id, after, 100) };
+    const query = EventsQuerySchema.safeParse(request.query);
+    if (!query.success) return reply.code(400).send({ error: "invalid_query" });
+    return { events: await store.listEvents(session.id, query.data.after, 100) };
   });
 
   app.get<{ Params: SessionParams }>("/v1/sessions/:sessionId/stream", async (request, reply) => {
     const session = await authorizeSession(request, reply, store, tokens);
     if (!session) return;
     applyCors(reply, session.origin, "GET, OPTIONS");
+    const parsedSequence = LastEventIdSchema.safeParse(request.headers["last-event-id"] ?? 0);
+    if (!parsedSequence.success) return reply.code(400).send({ error: "invalid_last_event_id" });
     reply.hijack();
     reply.raw.writeHead(200, {
       "Content-Type": "text/event-stream",
@@ -203,7 +243,7 @@ export function buildApi(dependencies: ApiDependencies) {
       "Access-Control-Allow-Origin": session.origin,
       Vary: "Origin"
     });
-    let sequence = Math.max(0, Number(request.headers["last-event-id"] ?? 0) || 0);
+    let sequence = parsedSequence.data;
     const deadline = Date.now() + 55_000;
     while (!reply.raw.destroyed && Date.now() < deadline) {
       const events = await store.listEvents(session.id, sequence, 100);
@@ -236,8 +276,23 @@ export function buildApi(dependencies: ApiDependencies) {
       if (!session) return;
       applyCors(reply, session.origin, "POST, OPTIONS");
       const parsed = AddMessageRequestSchema.safeParse(request.body);
-      if (!parsed.success || TERMINAL_SESSION_STATUSES.has(session.status))
+      if (!parsed.success)
+        return reply.code(400).send({ error: "invalid_request", details: parsed.error.flatten() });
+      if (TERMINAL_SESSION_STATUSES.has(session.status))
         return reply.code(409).send({ error: "session_not_active" });
+      const distributedLimit = await store.consumeRateLimit({
+        scope: "session-message",
+        key: `${session.id}\0${request.ip}`,
+        limit: 30,
+        windowSeconds: 60
+      });
+      if (!distributedLimit.allowed) {
+        reply.header("Retry-After", String(distributedLimit.retryAfterSeconds));
+        return reply.code(429).send({
+          error: "rate_limited",
+          retryAfterSeconds: distributedLimit.retryAfterSeconds
+        });
+      }
       await store.appendEvent(session.id, "visitor.message", { message: parsed.data.message });
       return reply.code(202).send({ accepted: true });
     }
@@ -314,6 +369,23 @@ function responseFor(config: AppConfig, session: DemoSession, accessToken: strin
     eventsUrl: `${base}/v1/sessions/${session.id}/stream`,
     viewUrl: `${base}/v1/sessions/${session.id}/view`
   };
+}
+
+function sessionRequestHash(goal: string, locale: string): string {
+  return hashValue(JSON.stringify({ goal, locale }));
+}
+
+function isIdempotentReplay(
+  session: DemoSession,
+  origin: string,
+  idempotencyKey: string,
+  requestHash: string
+): boolean {
+  return (
+    session.origin === origin &&
+    session.idempotencyKeyHash === hashValue(idempotencyKey) &&
+    (!session.requestHash || session.requestHash === requestHash)
+  );
 }
 
 export async function verifyTurnstile(
