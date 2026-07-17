@@ -15,6 +15,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint .",
     "sdk:sri": "node scripts/sri.mjs",
+    "sdk:smoke": "node scripts/smoke-sdk.mjs",
     "sdk:size": "node scripts/check-bundle-size.mjs",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",

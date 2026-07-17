@@ -29,7 +29,7 @@ Requirements: Node.js 22+, a Google Cloud project with Firestore/Cloud Tasks cre
 npm ci
 cp .env.example .env
 npm run check
-npm run build
+PRODUCT_DEMO_API_URL=http://localhost:8080 npm run build
 ```
 
 Run API and runner in separate terminals. End-to-end local runs require a Cloud Tasks-compatible queue or a manually invoked runner task; automated tests use in-memory fakes and never call paid providers.
@@ -51,7 +51,7 @@ Publish `packages/sdk/dist/product-demo.js` as an immutable, versioned asset. Ge
 
 ```html
 <script
-  src="https://cdn.example.com/product-demo/v0.1.0/product-demo.js"
+  src="https://cdn.example.com/product-demo/v1.0.0/product-demo.js"
   integrity="sha384-REPLACE_WITH_GENERATED_VALUE"
   crossorigin="anonymous"
   defer
@@ -60,32 +60,23 @@ Publish `packages/sdk/dist/product-demo.js` as an immutable, versioned asset. Ge
 <button id="see-demo">See a live AI demo</button>
 <script>
   window.addEventListener("DOMContentLoaded", () => {
-    ProductDemo.mount({
-      trigger: "#see-demo",
-      integrationId: "acme",
-      apiUrl: "https://demo-api.example.com"
-    });
+    const demo = new ProductDemo({ integrationId: "int_acme" });
+    demo.mount("#see-demo");
   });
 </script>
 ```
 
-The SDK also supports a declarative web component:
+The npm package uses the same interface:
 
-```html
-<ai-product-demo integration-id="acme" api-url="https://demo-api.example.com">
-  See a live AI demo
-</ai-product-demo>
+```ts
+import ProductDemo from "@product/sdk";
+
+const demo = new ProductDemo({ integrationId: "int_acme" });
+demo.mount("#see-demo");
 ```
 
-For production abuse protection, pass a Turnstile token callback to `mount` or assign
-`getChallengeToken` on the custom element. Never put the Turnstile secret, Steel key, model key,
-or session signing secret in browser code.
-
-The controller exposes `open()`, `start(goal, turnstileToken)`, `sendMessage(message)`, `close()`,
-`on(event, listener)`, and `destroy()`. The component emits `product-demo:open`,
-`product-demo:start`, `product-demo:event`, `product-demo:error`, and `product-demo:close`.
-See the [SDK guide](packages/sdk/README.md) for ESM, custom transport, error handling, CSP, and
-lifecycle examples.
+Most developers only need the constructor and `mount()`. See the [SDK guide](packages/sdk/README.md)
+for optional controls, typed events, Turnstile, self-hosting, CSP, and error handling.
 
 ## Deploy
 
@@ -98,7 +89,8 @@ Release approval is governed by the [production readiness contract](docs/product
 ## Commands
 
 - `npm run check` — typecheck, lint, and test
-- `npm run build` — compile contracts/server and bundle the embed
+- `PRODUCT_DEMO_API_URL=https://api.example.com npm run build` — compile the server and build an SDK pinned to that API
+- `npm run sdk:smoke` — verify the exact CDN global and ESM default-export formats
 - `npm run sdk:sri` — print the embed's SHA-384 SRI value
 - `npm run admin:seed -- file.json` — create or update an integration
 

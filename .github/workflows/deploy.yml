@@ -53,7 +53,9 @@ jobs:
         working-directory: infra/terraform
       - run: terraform apply -input=false -auto-approve tfplan
         working-directory: infra/terraform
-      - run: npm ci && npm run build --workspace @product/embed && npm run sdk:size
+      - run: npm ci && npm run build --workspace @product/sdk && npm run sdk:smoke && npm run sdk:size
+        env:
+          PRODUCT_DEMO_API_URL: ${{ env.PUBLIC_API_URL }}
       - run: gcloud storage cp packages/sdk/dist/product-demo.js "gs://${PROJECT_ID}-product-demo-sdk/${GITHUB_SHA}/product-demo.js" --cache-control="public,max-age=31536000,immutable" --content-type="application/javascript"
       - run: |
           echo "SDK SRI: $(npm run --silent sdk:sri)" >> "${GITHUB_STEP_SUMMARY}"

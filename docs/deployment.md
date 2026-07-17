@@ -44,7 +44,7 @@ Map the API service to a custom domain or HTTPS load balancer, then ensure `PUBL
 
 ```bash
 npm ci
-npm run build --workspace @product/embed
+PRODUCT_DEMO_API_URL=https://demo-api.example.com npm run build --workspace @product/sdk
 npm run sdk:sri
 ```
 

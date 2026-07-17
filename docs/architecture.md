@@ -2,7 +2,7 @@
 
 ## Services
 
-`@product/embed` is a dependency-free custom element isolated by a closed Shadow DOM. It never receives a Steel API key, model key, HMAC secret, or customer credentials. Its session capability stays in memory and is sent only in the `Authorization` header.
+`@product/sdk` exposes one dependency-free `ProductDemo` client. Its internal custom element is isolated by a closed Shadow DOM and is not part of the public integration surface. It never receives a Steel API key, model key, HMAC secret, or customer credentials. Its session capability stays in memory and is sent only in the `Authorization` header.
 
 `@product/server` has two entrypoints. `api.ts` is the internet-facing control plane. `runner.ts` is private and invokable only by Cloud Tasks through Cloud Run IAM. Both use Firestore as the durable source of truth.
 
