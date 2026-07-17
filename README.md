@@ -47,7 +47,7 @@ npm run admin:seed -- config/integration.example.json
 
 ## Embed
 
-Publish `packages/sdk/dist/product-demo.js` as an immutable, versioned asset. Generate its integrity value with `npm run sdk:sri`.
+Publish `packages/sdk/dist/product-demo.js` as an immutable, versioned asset. Generate its integrity value with `npm run sdk:sri`. The fastest integration attaches the SDK to the developer's existing demo button:
 
 ```html
 <script
@@ -57,19 +57,35 @@ Publish `packages/sdk/dist/product-demo.js` as an immutable, versioned asset. Ge
   defer
 ></script>
 
-<ai-product-demo integration-id="acme" api-url="https://demo-api.example.com"
-  >See a live AI demo</ai-product-demo
->
+<button id="see-demo">See a live AI demo</button>
+<script>
+  window.addEventListener("DOMContentLoaded", () => {
+    ProductDemo.mount({
+      trigger: "#see-demo",
+      integrationId: "acme",
+      apiUrl: "https://demo-api.example.com"
+    });
+  });
+</script>
 ```
 
-For production abuse protection, connect the host site's Turnstile integration without putting a secret in the browser:
+The SDK also supports a declarative web component:
 
-```js
-const demo = document.querySelector("ai-product-demo");
-demo.getChallengeToken = () => turnstile.execute("widget-id", { action: "product_demo" });
+```html
+<ai-product-demo integration-id="acme" api-url="https://demo-api.example.com">
+  See a live AI demo
+</ai-product-demo>
 ```
 
-The component also exposes `open()`, `start(goal, turnstileToken)`, and `close()`, and emits `product-demo:open`, `product-demo:start`, `product-demo:event`, `product-demo:error`, and `product-demo:close` events.
+For production abuse protection, pass a Turnstile token callback to `mount` or assign
+`getChallengeToken` on the custom element. Never put the Turnstile secret, Steel key, model key,
+or session signing secret in browser code.
+
+The controller exposes `open()`, `start(goal, turnstileToken)`, `sendMessage(message)`, `close()`,
+`on(event, listener)`, and `destroy()`. The component emits `product-demo:open`,
+`product-demo:start`, `product-demo:event`, `product-demo:error`, and `product-demo:close`.
+See the [SDK guide](packages/sdk/README.md) for ESM, custom transport, error handling, CSP, and
+lifecycle examples.
 
 ## Deploy
 

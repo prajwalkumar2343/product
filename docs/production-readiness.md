@@ -11,7 +11,7 @@
 - Exact-origin capabilities, Turnstile host/action binding, private runner IAM, and sanitized API errors.
 - Exact network host policy, service-worker bypass, WebSocket policy, and default-deny element capabilities.
 - Bounded model context/output, typed tools, provider timeouts/retries, and token/latency evidence events.
-- Runtime-validated embed protocol, terminal stream handling, sandboxed Steel iframe, and a sub-10 KB minified SDK target.
+- Runtime-validated embed protocol, terminal stream handling, sandboxed Steel iframe, and a 7 KB gzipped SDK budget enforced in CI.
 - Pinned runtime dependencies, immutable GitHub Action SHAs, dependency audit, Docker build, Terraform formatting/validation, and protected manual production deployment.
 
 ## Mandatory environment gates
