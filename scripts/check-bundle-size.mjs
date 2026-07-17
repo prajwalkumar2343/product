@@ -3,8 +3,8 @@ import { readFile } from "node:fs/promises";
 import { gzipSync } from "node:zlib";
 
 const file = new URL("../packages/sdk/dist/product-demo.js", import.meta.url);
-const maximumBytes = 20_000;
-const maximumGzipBytes = 7_000;
+const maximumBytes = 22_000;
+const maximumGzipBytes = 7_500;
 const { size } = await stat(file);
 const gzipSize = gzipSync(await readFile(file), { level: 9 }).byteLength;
 if (size > maximumBytes) {

@@ -1,7 +1,9 @@
 // @vitest-environment happy-dom
 
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { ProductDemo, ProductDemoError, mount } from "./index.js";
+import { ProductDemoClient } from "./client.js";
+import { ProductDemoElement } from "./element.js";
+import ProductDemo from "./index.js";
 
 describe("embed session lifecycle", () => {
   afterEach(() => {
@@ -40,9 +42,7 @@ describe("embed session lifecycle", () => {
         )
       );
     vi.stubGlobal("fetch", fetchMock);
-    const element = document.createElement("ai-product-demo") as HTMLElement & {
-      start(goal: string): Promise<void>;
-    };
+    const element = new ProductDemoElement();
     element.setAttribute("integration-id", "acme");
     element.setAttribute("api-url", "https://api.example.com");
     document.body.append(element);
@@ -51,8 +51,8 @@ describe("embed session lifecycle", () => {
       events.push((event as CustomEvent).detail)
     );
     await element.start("Show analytics");
+    await vi.waitFor(() => expect(events).toEqual([terminalEvent]));
     expect(fetchMock).toHaveBeenCalledTimes(2);
-    expect(events).toEqual([terminalEvent]);
     expect("session" in element).toBe(false);
     expect("root" in element).toBe(false);
   });
@@ -61,16 +61,15 @@ describe("embed session lifecycle", () => {
     const button = document.createElement("button");
     button.id = "demo";
     document.body.append(button);
-    const demo = mount({
-      trigger: "#demo",
+    const demo = new ProductDemo({
       integrationId: "acme",
-      apiUrl: "https://api.example.com",
+      baseURL: "https://api.example.com",
       fetch: vi.fn()
     });
+    expect(demo.mount("#demo")).toBe(demo);
     expect(demo).toBeInstanceOf(ProductDemo);
-    expect(document.querySelector("ai-product-demo")).toBe(demo.element);
     const opened = vi.fn();
-    demo.element.addEventListener("product-demo:open", opened);
+    demo.on("open", opened);
     button.click();
     expect(opened).toHaveBeenCalledOnce();
     await demo.destroy();
@@ -80,13 +79,12 @@ describe("embed session lifecycle", () => {
 
   it("fails clearly when the configured trigger does not exist", () => {
     expect(() =>
-      mount({
-        trigger: "#missing",
+      new ProductDemo({
         integrationId: "acme",
-        apiUrl: "https://api.example.com",
+        baseURL: "https://api.example.com",
         fetch: vi.fn()
-      })
-    ).toThrow(ProductDemoError);
+      }).mount("#missing")
+    ).toThrow(ProductDemo.Error);
   });
 
   it("deduplicates concurrent start calls", async () => {
@@ -141,7 +139,7 @@ describe("embed session lifecycle", () => {
       received.push((value as CustomEvent<{ sequence: number }>).detail.sequence)
     );
     await element.start("Show analytics");
-    expect(received).toEqual([1, 2]);
+    await vi.waitFor(() => expect(received).toEqual([1, 2]));
   });
 
   it("rejects an event that belongs to another session", async () => {
@@ -165,12 +163,14 @@ describe("embed session lifecycle", () => {
       errors.push((value as CustomEvent).detail)
     );
     await element.start("Show analytics");
-    expect(errors).toEqual([
-      expect.objectContaining({
-        code: "invalid_response",
-        message: "Event belongs to another session"
-      })
-    ]);
+    await vi.waitFor(() =>
+      expect(errors).toEqual([
+        expect.objectContaining({
+          code: "invalid_response",
+          message: "Event belongs to another session"
+        })
+      ])
+    );
   });
 
   it("cancels the server session when the host closes the modal", async () => {
@@ -217,23 +217,15 @@ function responseFor(sessionId: string) {
 }
 
 function configuredElement(fetch: typeof globalThis.fetch) {
-  const element = document.createElement("ai-product-demo") as ProductDemoElementShape;
+  const element = new ProductDemoElement();
   element.configure({
     integrationId: "acme",
-    apiUrl: "https://api.example.com",
-    fetch
+    client: new ProductDemoClient({
+      integrationId: "acme",
+      apiUrl: "https://api.example.com",
+      fetch
+    })
   });
   document.body.append(element);
   return element;
-}
-
-interface ProductDemoElementShape extends HTMLElement {
-  configure(options: {
-    integrationId: string;
-    apiUrl: string;
-    fetch: typeof globalThis.fetch;
-  }): ProductDemoElementShape;
-  open(): void;
-  start(goal: string): Promise<void>;
-  close(): Promise<void>;
 }

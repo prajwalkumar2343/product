@@ -1,116 +1,136 @@
-# Product Demo browser SDK
+# ProductDemo JavaScript SDK
 
-Add a secure, live AI product demo to an existing button without exposing server credentials or
-rebuilding the host website.
+Add a live AI product demo to an existing button with one client and one method.
 
-## Existing button
+## Install
+
+```bash
+npm install @product/sdk
+```
+
+## Quickstart
+
+```ts
+import ProductDemo from "@product/sdk";
+
+const demo = new ProductDemo({
+  integrationId: "int_acme"
+});
+
+demo.mount("#see-demo");
+```
+
+```html
+<button id="see-demo">See a live demo</button>
+```
+
+`mount()` keeps the website's existing button and design. Clicking it opens the live demo on the
+same page.
+
+## CDN
 
 ```html
 <script
-  src="https://cdn.example.com/product-demo/v0.1.0/product-demo.js"
+  src="https://cdn.example.com/product-demo/v1.0.0/product-demo.js"
   integrity="sha384-REPLACE_WITH_RELEASE_VALUE"
   crossorigin="anonymous"
   defer
 ></script>
 
-<button id="see-demo">See the product in action</button>
+<button id="see-demo">See a live demo</button>
 
 <script>
   window.addEventListener("DOMContentLoaded", () => {
-    const demo = ProductDemo.mount({
-      trigger: "#see-demo",
-      integrationId: "acme",
-      apiUrl: "https://demo-api.example.com",
-      getChallengeToken: () => turnstile.execute("public-widget-id", { action: "product_demo" })
+    const demo = new ProductDemo({
+      integrationId: "int_acme"
     });
 
-    demo.on("product-demo:error", ({ detail }) => {
-      console.warn("Demo error", detail.code, detail.requestId);
-    });
+    demo.mount("#see-demo");
   });
 </script>
 ```
 
-`ProductDemo.mount` creates the modal, keeps the customer button's design, and returns a controller:
+The CDN script exposes the constructor directly as `window.ProductDemo`.
 
-```js
+## Optional controls
+
+Most websites only need `mount()`. Applications that need more control can use:
+
+```ts
 demo.open();
-await demo.start("Show me how analytics filters work");
-await demo.sendMessage("Now compare this month with last month");
+
+const { sessionId } = await demo.start("Show me how analytics filters work");
+
+await demo.send("Now compare this month with last month");
 await demo.close();
 await demo.destroy();
 ```
 
-## Package / ESM
+`start()` resolves when the server accepts the session; the live demo continues in the modal.
+`destroy()` is idempotent and removes the modal and trigger listener.
 
-```bash
-npm install @product/embed
-```
-
-```ts
-import { mount, ProductDemoApiError } from "@product/embed";
-
-const demo = mount({
-  trigger: document.querySelector("#see-demo"),
-  integrationId: "acme",
-  apiUrl: "https://demo-api.example.com"
-});
-
-demo.on("product-demo:error", (event) => {
-  const { code, status, requestId } = (event as CustomEvent).detail;
-  console.error({ code, status, requestId });
-});
-```
-
-The ESM entry is safe to import during server rendering. Call `mount` only in the browser.
-
-## Declarative component
-
-```html
-<ai-product-demo integration-id="acme" api-url="https://demo-api.example.com">
-  See a live AI demo
-</ai-product-demo>
-```
-
-```js
-const demo = document.querySelector("ai-product-demo");
-demo.locale = "en-IN";
-demo.getChallengeToken = () => turnstile.execute("public-widget-id", { action: "product_demo" });
-```
-
-## Typed low-level client
-
-Use the client directly when a team needs to build its own UI:
+## Events
 
 ```ts
-import { ProductDemoClient } from "@product/embed/client";
-
-const client = new ProductDemoClient({
-  apiUrl: "https://demo-api.example.com",
-  integrationId: "acme",
-  timeoutMilliseconds: 15_000,
-  maxRetries: 2
+const stopListening = demo.on("started", ({ sessionId }) => {
+  console.log("Demo started", sessionId);
 });
 
-const session = await client.create({
-  goal: "Show analytics",
-  locale: "en"
+demo.on("error", ({ code, status, requestId, message }) => {
+  console.error({ code, status, requestId, message });
+});
+
+demo.on("closed", () => {
+  console.log("Demo closed");
+});
+
+stopListening();
+```
+
+Supported events are `open`, `started`, `event`, `error`, and `closed`.
+
+## Turnstile
+
+If the integration requires Cloudflare Turnstile, provide a callback that returns a short-lived
+public challenge token:
+
+```ts
+const demo = new ProductDemo({
+  integrationId: "int_acme",
+  getChallengeToken: () =>
+    turnstile.execute("public-widget-id", {
+      action: "product_demo"
+    })
 });
 ```
 
-Like Steel's official SDK, the client accepts a custom `fetch` implementation for tracing or test
-isolation. Session creation is retried only with the same idempotency key. Errors are
-`ProductDemoError` instances with a stable `code`; HTTP failures are `ProductDemoApiError` instances
-that also expose `status`, `retryAfterSeconds`, and `requestId`.
+Never put a Turnstile secret, Steel API key, model key, or session-signing secret in browser code.
 
-## Security and CSP
+## Self-hosting and advanced transport
 
-- Browser code receives only a short-lived session capability. Keep all private keys server-side.
-- The client pins session endpoints to the configured API origin and never sends browser cookies.
-- Publish immutable SDK URLs with SRI and `crossorigin="anonymous"`.
-- Add the SDK CDN to `script-src`, the API origin to `connect-src`, and Steel's viewer origin to
-  `frame-src`.
-- Register every production website origin in the integration allowlist. Wildcard CORS is not used.
+The hosted SDK already contains the production API endpoint. Self-hosted deployments may override
+it:
 
-The viewer iframe is sandboxed and receives no clipboard permission. Stream buffers, response bodies,
-retry counts, and reconnect delays are bounded.
+```ts
+const demo = new ProductDemo({
+  integrationId: "int_acme",
+  baseURL: "https://demo-api.example.com",
+  timeout: 15_000,
+  maxRetries: 2,
+  fetch: customFetch
+});
+```
+
+The SDK validates the API origin, omits browser cookies, rejects redirects, uses stable idempotency
+keys for safe retries, and exposes typed errors as `ProductDemo.Error` and
+`ProductDemo.APIError`.
+
+## Content Security Policy
+
+For a strict CSP, allow:
+
+- the immutable SDK URL in `script-src`;
+- the product-demo API origin in `connect-src`;
+- Steel's viewer origin in `frame-src`.
+
+Publish CDN builds with Subresource Integrity and `crossorigin="anonymous"`.

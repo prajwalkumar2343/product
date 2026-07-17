@@ -219,10 +219,11 @@ function normalizeApiUrl(value: string): string {
     (url.protocol !== "https:" && !(local && url.protocol === "http:")) ||
     url.username ||
     url.password ||
+    url.pathname !== "/" ||
     url.search ||
     url.hash
   )
-    throw new ProductDemoError("apiUrl must be a secure URL without credentials or a query", {
+    throw new ProductDemoError("apiUrl must be a secure origin without credentials or a query", {
       code: "configuration_error"
     });
   return url.href.replace(/\/$/, "");

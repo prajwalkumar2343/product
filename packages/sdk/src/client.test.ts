@@ -26,6 +26,7 @@ describe("ProductDemoClient", () => {
     "not-a-url",
     "http://api.example.com",
     "https://user:pass@api.example.com",
+    "https://api.example.com/base",
     "https://api.example.com?secret=value",
     "ftp://api.example.com"
   ])("rejects unsafe API URL %s", (apiUrl) => {

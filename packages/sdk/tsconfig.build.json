@@ -3,7 +3,7 @@
   "compilerOptions": {
     "composite": false,
     "declaration": true,
-    "declarationMap": true,
+    "declarationMap": false,
     "emitDeclarationOnly": true,
     "outDir": "dist-types",
     "tsBuildInfoFile": "dist-types/.tsbuildinfo"
